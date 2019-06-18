@@ -33,10 +33,12 @@ class RnnPathMemory(PathMemory):
                 batch_first=True)
 
         self.forward_enc = _make_rnn()
-        self.backward_enc = _make_rnn()
+        # self.backward_enc = _make_rnn()
         repr_dim = conf.n_hidden
 
-        self.predictor = nn.Linear(repr_dim, n_emb)
+        self.out = nn.Linear(repr_dim, n_emb)
+        if conf.tie_weights:
+            self.out.weight = nn.Parameter(self.emb.weight)
         self.log_softmax = nn.LogSoftmax(dim=1)
         self.crit = nn.NLLLoss()
 
@@ -56,7 +58,7 @@ class RnnPathMemory(PathMemory):
         return self._predict(path_enc, target)
 
     def _predict(self, path_enc, target=None):
-        logit = self.predictor(path_enc)
+        logit = self.out(path_enc)
         pred = self.log_softmax(logit)
         # result = {'pred': pred}
         if target is not None:

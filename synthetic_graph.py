@@ -22,8 +22,10 @@ def primesfrom2to(n):
 
 
 def generate_graph(conf):
-    undir_graph = getattr(nx, conf.graph_type)(**conf.graph_generator_args)
-    n_edges = len(undir_graph.edges())
+    _graph = getattr(nx, conf.graph_type)(**conf.graph_generator_args)
+    if conf.graph_type == 'scale_free_graph':
+        _graph = nx.DiGraph(_graph)
+    n_edges = len(_graph.edges())
 
     edge_label_noise_generator = np.random.power
     edge_label_noise = edge_label_noise_generator(
@@ -39,20 +41,23 @@ def generate_graph(conf):
         nonprimes = [
             i for i in range(conf.n_nodes + n_primes) if i not in primes_set]
         assert len(nonprimes) >= conf.n_nodes
-        edges = [(nonprimes[v], nonprimes[w]) for v, w in undir_graph.edges()]
+        edges = [(nonprimes[v], nonprimes[w]) for v, w in _graph.edges()]
         edge_labels = primes.take(edge_label_idxs)
     else:
-        edges = list(undir_graph.edges())
+        edges = list(_graph.edges())
         edge_labels = edge_label_idxs + conf.n_nodes
 
-    graph = nx.DiGraph()
-    graph.add_edges_from(edges)
+    if conf.graph_type == 'scale_free_graph':
+        graph = _graph
+    else:
+        graph = nx.DiGraph()
+        graph.add_edges_from(edges)
     edge_idx = 0
     for node, neighbors in graph.adjacency():
         for neighbor, edict in neighbors.items():
             edict['label'] = edge_labels[edge_idx]
             edge_idx += 1
-    assert n_edges == edge_idx
+    assert n_edges == edge_idx, breakpoint()
     return graph
 
 
@@ -72,9 +77,10 @@ def sample_paths(conf, graph=None):
         graph_nodes = np.array(list(graph.nodes))
         yielded_paths = defaultdict(set)
         if conf.unique_targets:
+            failures = 0
             while True:
                 start_node_idxs = np.random.randint(
-                    0, len(graph.nodes), conf.n_paths - yielded)
+                    0, len(graph.nodes), conf.max_paths - yielded)
                 start_nodes = graph_nodes[start_node_idxs]
                 for start_node in start_nodes:
                     neighbors = list(graph.adj[start_node].items())
@@ -86,14 +92,20 @@ def sample_paths(conf, graph=None):
                         yield list(map(
                             int, (start_node, label, end_node)))
                         yielded_paths[start_node].add(label)
-
-                    yielded += 1
-                if yielded >= conf.n_paths:
+                        yielded += 1
+                        failures = 0
+                    else:
+                        failures += 1
+                        if failures > 100000:
+                            raise ValueError(
+                                f'Cannot sample {conf.max_paths} paths. '
+                                f'Yielded {yielded} unique paths.')
+                if yielded >= conf.max_paths:
                     break
         else:
             while True:
                 start_node_idxs = np.random.randint(
-                    0, len(graph.nodes), conf.n_paths - yielded)
+                    0, len(graph.nodes), conf.max_paths - yielded)
                 start_nodes = graph_nodes[start_node_idxs]
                 for start_node in start_nodes:
                     neighbors = list(graph.adj[start_node].items())
@@ -103,7 +115,7 @@ def sample_paths(conf, graph=None):
                     yield list(map(
                         int, (start_node, edge_dict['label'], end_node)))
                     yielded += 1
-                if yielded >= conf.n_paths:
+                if yielded >= conf.max_paths:
                     break
 
     for sample_id in range(conf.n_path_samples):
@@ -142,9 +154,14 @@ def get_graphfile(outdir):
     return graphfile
 
 
+def _graphfile(conf):
+    outdir = get_graphdir(conf)
+    return get_graphfile(outdir)
+
+
 def path_sample_conf_str(conf, sample_id):
     parts = [
-        'n_paths' + str(conf.n_paths),
+        'max_paths' + str(conf.max_paths),
         f'sample_id{sample_id:02d}']
     return ('unique_targets.' if conf.unique_targets else '') + '.'.join(parts)
 

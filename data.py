@@ -28,8 +28,11 @@ class SyntheticPaths(KnowledgeGraphPaths):
             from synthetic_graph import sample_paths
             sample_paths(conf)
         self.paths_raw = list(
-            jsonlines_load(paths_file, max=conf.max_paths))
-        self.tensor = torch.tensor(self.paths_raw).to(device=conf.device)
+            jsonlines_load(paths_file, max=conf.n_paths))
+        self.tensor = torch.tensor(self.paths_raw)
+        assert len(self.tensor) == conf.n_paths
+        if not conf.data_on_cpu:
+            self.tensor = self.tensor.to(device=conf.device)
 
     def __getitem__(self, index):
         return self.tensor[index]
