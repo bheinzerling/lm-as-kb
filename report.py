@@ -11,6 +11,9 @@ from bokeh.io import export_png, export_svgs
 from bokeh.transform import linear_cmap
 import bokeh.palettes
 
+from joblib import Parallel, delayed
+import joblib
+
 from dougu import Results, to_from_idx
 from dougu.plot import (
     plt, simple_imshow, colors, linestyles, markers, Figure)
@@ -20,8 +23,7 @@ from argparser import get_args
 from run_exp import columns, index
 
 
-def plot_graph(conf):
-    # from data import KnowledgeGraphPaths
+def get_graph_data(conf):
     from synthetic_graph import (
         generate_graph, get_graphfile, get_graphdir)
     graphdir = get_graphdir(conf)
@@ -35,31 +37,57 @@ def plot_graph(conf):
     else:
         graph = generate_graph(conf)
         nx.write_edgelist(graph, graphfile)
-    # paths = KnowledgeGraphPaths.load(conf)
     pagerank = nx.pagerank(graph)
 
-    graph_renderer = from_networkx(
-        graph, nx.spring_layout, k=0.1, scale=1, center=(0, 0))
-    layout = graph_renderer.layout_provider.to_json(False)['graph_layout']
-    # TODO: write out memorized edges after every batch/epoch -> one frame
-    # loop, change glyph and edge colors in every frame, create animation
-    # change glyph color by majority of (not) memorized edges
-    # pred_prob as color, red-blue scale
+    cachefile = conf.outdir / f'{conf_str}.pkl'
+    if cachefile.exists():
+        layout = joblib.load(cachefile)
+    else:
+        graph_renderer = from_networkx(
+            graph, nx.spring_layout, k=0.1, scale=1, center=(0, 0))
+        layout = graph_renderer.layout_provider.to_json(False)['graph_layout']
+        joblib.dump(layout, cachefile)
+    return {
+        'graph': graph,
+        'pagerank': pagerank,
+        'conf_str': conf_str,
+        'graphfile': graphfile,
+        'layout': layout}
+
+
+def plot_graph(conf):
+    gd = get_graph_data(conf)
+    graph = gd['graph']
+    pagerank = gd['pagerank']
+    conf_str = gd['conf_str']
+    graphfile = gd['graphfile']
+    layout = gd['layout']
     if conf.animate:
         pred_files = sorted(conf.rundir.glob('predictions.e*.pt'))
         n_pred_files = len(pred_files)
-        for i, pred_file in enumerate(pred_files):
+
+        def worker(i_and_pred_file):
+            i, pred_file = i_and_pred_file
             epoch = int(pred_file.name.split('.')[-2][1:])
             if i < n_pred_files - 1:
                 if epoch < 2 or epoch % conf.frame_every_n_epochs != 0:
-                    continue
+                    return
             outdir = conf.rundir
             outfile = (outdir / conf_str).with_suffix(f'.e{epoch:06d}.html')
             pred = torch.load(pred_file)
             _plt_graph(
                 conf, conf_str, graph, layout, pagerank, outfile, pred=pred)
-        print(len(set(pred['fw_path'][:, 0].tolist())), 'head entities')
-        print(len(set(pred['fw_target'].tolist())), 'tail entities')
+
+        if conf.plot_threads > 1:
+            tasks = list(enumerate(pred_files))
+            Parallel(n_jobs=conf.plot_threads, prefer='threads')(
+                delayed(worker)(task) for task in tasks)
+        else:
+            for i, pred_file in enumerate(pred_files):
+                worker((i, pred_file))
+
+        # print(len(set(pred['fw_path'][:, 0].tolist())), 'head entities')
+        # print(len(set(pred['fw_target'].tolist())), 'tail entities')
     conf.animate = False
     outdir = graphfile.parent / 'fig'
     outfile = (outdir / conf_str).with_suffix('.graph_bokeh.html')
@@ -75,29 +103,35 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
     plot.title.text = conf_str
     tooltips = [("index", "@index")]
     if pred is not None:
-        tooltips.append(("prob", "@prob"))
-    node_hover_tool = HoverTool(tooltips=tooltips)
-    plot.add_tools(node_hover_tool, BoxZoomTool(), ResetTool())
-    if pred is not None:
         edge_colors = {}
-        node_probs = {node: [] for node in graph.nodes}
+        node_vals = {node: [] for node in graph.nodes}
         paths = torch.cat([
             pred['fw_path'], pred['fw_target'].unsqueeze(1)], dim=1)
         for start_node, end_node, edge_data in graph.edges(data=True):
             edge_colors[(start_node, end_node)] = np.nan
-        for path, pred_prob in zip(paths.tolist(), pred['fw_pred'].tolist()):
+        if conf.color_by == 'prob_ratio':
+            pred_vals = pred['fw_prob_ratio']
+        elif conf.color_by == 'rank':
+            ranks = pred['fw_rank']
+            pred_vals = 1 / ranks.float()
+        else:
+            raise ValueError('cannot color nodes by ' + conf.color_by)
+        tooltips.append((conf.color_by, "@" + conf.color_by))
+        for path, pred_val in zip(paths.tolist(), pred_vals.tolist()):
             start_node, edge_label, end_node = map(str, path)
-            edge_colors[(start_node, end_node)] = pred_prob
-            node_probs[start_node].append(pred_prob)
-            node_probs[end_node].append(pred_prob)
+            edge_colors[(start_node, end_node)] = pred_val
+            node_vals[start_node].append(pred_val)
+            node_vals[end_node].append(pred_val)
         for node in graph.nodes:
-            if not len(node_probs[node]):
-                node_probs[node] = np.nan
+            if not len(node_vals[node]):
+                node_vals[node] = np.nan
             else:
-                node_probs[node] = np.average(node_probs[node])
+                node_vals[node] = np.average(node_vals[node])
         nx.set_edge_attributes(graph, edge_colors, 'edge_color')
-        nx.set_node_attributes(graph, node_probs, 'prob')
+        nx.set_node_attributes(graph, node_vals, conf.color_by)
 
+    node_hover_tool = HoverTool(tooltips=tooltips)
+    plot.add_tools(node_hover_tool, BoxZoomTool(), ResetTool())
     graph_renderer = from_networkx(graph, layout)
     s = np.clip(np.power(np.array([
         pagerank[idx]
@@ -118,7 +152,7 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
     if reverse:
         palette = list(reversed(palette))
 
-    node_color = linear_cmap('prob', palette, 0, 1, nan_color='gray')
+    node_color = linear_cmap(conf.color_by, palette, 0, 1, nan_color='gray')
     graph_renderer.node_renderer.glyph = Circle(
         line_color=node_color,
         line_alpha=0.6,
@@ -133,17 +167,20 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
         line_alpha=0.8, line_width=.2)
     plot.renderers = [graph_renderer]
     # if not conf.graph_sweep and not conf.animate:
+    # if 'html' in conf.format:
     if True:
         output_file(outfile)
         print(outfile)
         save(plot)
-    png_file = outfile.with_suffix('.png')
-    export_png(plot, filename=png_file)
-    print(png_file)
-    # plot.output_backend = "svg"
-    # svg_file = outfile.with_suffix('.svg')
-    # export_svgs(plot, filename=svg_file)
-    # print(svg_file)
+    if 'png' in conf.format:
+        png_file = outfile.with_suffix('.png')
+        export_png(plot, filename=png_file, timeout=20)
+        print(png_file)
+    if 'svg' in conf.format:
+        plot.output_backend = "svg"
+        svg_file = outfile.with_suffix('.svg')
+        export_svgs(plot, filename=svg_file)
+        print(svg_file)
 
 
 def plot_results(conf):

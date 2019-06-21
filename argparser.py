@@ -33,6 +33,9 @@ def add_generate_graph_args(a):
     a.add_argument('--n-path-samples', type=int, default=1)
     a.add_argument('--prime-predicates', action='store_true')
     a.add_argument('--unique-targets', action='store_true')
+    a.add_argument('--min-path-len', type=int, default=3)
+    a.add_argument('--max-path-len', type=int, default=3)
+    a.add_argument('--path-len-poisson-lambda', type=int, default=3)
 
 
 def add_model_args(a):
@@ -97,7 +100,12 @@ def add_plot_args(a):
     a.add_argument('--frame-every-n-epochs', type=int, default=10)
     a.add_argument('--animate', action='store_true')
     a.add_argument('--default-edge-color', type=str, default='grey')
+    a.add_argument(
+        '--color-by', type=str, choices=['prob-ratio', 'rank'], default='rank')
     a.add_argument('--cmap', type=str, default='RdYlBu_r')
+    a.add_argument(
+        '--format', type=str, nargs='+', default=['html', 'png', 'svg'])
+    a.add_argument('--plot-threads', type=int, default=1)
 
 
 def get_argparser():

@@ -1,10 +1,11 @@
 import random
 import json
 from collections import defaultdict
+from itertools import islice
 
 import numpy as np
 import networkx as nx
-from dougu import mkdir
+from dougu import mkdir, flatten
 
 from argparser import get_args
 
@@ -66,65 +67,128 @@ def sample_paths(conf, graph=None):
     random.seed(conf.random_seed)
     if graph is None:
         graph = generate_graph(conf)
-
     outdir = get_graphdir(conf)
     graphfile = get_graphfile(outdir)
     nx.write_edgelist(graph, graphfile)
     print(graphfile)
 
-    def _sample_paths():
-        yielded = 0
-        graph_nodes = np.array(list(graph.nodes))
-        yielded_paths = defaultdict(set)
-        if conf.unique_targets:
-            failures = 0
-            while True:
-                start_node_idxs = np.random.randint(
-                    0, len(graph.nodes), conf.max_paths - yielded)
-                start_nodes = graph_nodes[start_node_idxs]
-                for start_node in start_nodes:
-                    neighbors = list(graph.adj[start_node].items())
-                    if not neighbors:
-                        continue
-                    end_node, edge_dict = random.choice(neighbors)
-                    label = edge_dict['label']
-                    if label not in yielded_paths[start_node]:
-                        yield list(map(
-                            int, (start_node, label, end_node)))
-                        yielded_paths[start_node].add(label)
-                        yielded += 1
-                        failures = 0
-                    else:
-                        failures += 1
-                        if failures > 100000:
-                            raise ValueError(
-                                f'Cannot sample {conf.max_paths} paths. '
-                                f'Yielded {yielded} unique paths.')
-                if yielded >= conf.max_paths:
-                    break
-        else:
-            while True:
-                start_node_idxs = np.random.randint(
-                    0, len(graph.nodes), conf.max_paths - yielded)
-                start_nodes = graph_nodes[start_node_idxs]
-                for start_node in start_nodes:
-                    neighbors = list(graph.adj[start_node].items())
-                    if not neighbors:
-                        continue
-                    end_node, edge_dict = random.choice(neighbors)
-                    yield list(map(
-                        int, (start_node, edge_dict['label'], end_node)))
-                    yielded += 1
-                if yielded >= conf.max_paths:
-                    break
+    if conf.max_path_len == conf.min_path_len == 3:
+        sample_fn = _sample_triples
+    else:
+        sample_fn = _sample_paths
 
     for sample_id in range(conf.n_path_samples):
-        paths = list(_sample_paths())
+        paths = islice(sample_fn(conf, graph), conf.max_paths)
         outfile = get_path_sample_file(conf, sample_id)
         print(outfile)
         with outfile.open('w') as out:
             for path in paths:
                 out.write(json.dumps(path) + '\n')
+
+
+def _sample_paths(conf, graph):
+    from collections import Counter
+    yielded = 0
+    graph_nodes = np.array(list(graph.nodes))
+    yielded_paths = set()
+
+    path_lengths = np.random.poisson(
+        lam=conf.path_len_poisson_lambda,
+        size=conf.max_paths) * 2 + conf.min_path_len
+    path_lengths = path_lengths.clip(0, conf.max_path_len)
+    print(sorted(Counter(path_lengths).most_common()))
+    while True:
+        failures = 0
+        start_node_idxs = np.random.randint(
+            0, len(graph.nodes), conf.max_paths - yielded)
+        start_nodes = graph_nodes[start_node_idxs]
+        for start_node, path_length in zip(start_nodes, path_lengths):
+            path = sample_path(start_node, graph, path_length)
+            if path and path not in yielded_paths:
+                yield path
+                yielded_paths.add(path)
+                failures = 0
+            else:
+                failures += 1
+        if failures > 100000:
+            raise ValueError(
+                f'Cannot sample {conf.max_paths} paths. '
+                f'Yielded {yielded} unique paths.')
+
+
+def sample_path(start_node, graph, path_length, allow_cycles=False):
+    path = [(None, int(start_node))]
+    if allow_cycles:
+        raise NotImplementedError
+    visited_nodes = set()
+    failures = 0
+    while len(tuple(flatten(path))[1:]) < path_length:
+        if not path or failures > 10 * path_length:
+            return None
+        edge_label, node = path[-1]
+        visited_nodes.add(int(node))
+        adj_entries = graph.adj.get(node, {})
+        neighbors = list(adj_entries.items())
+        unvisited_neighbors = set(adj_entries.keys()) - visited_nodes
+        if not neighbors or not unvisited_neighbors:
+            del path[-1]
+            failures += 1
+            continue
+        next_node, next_edge_dict = random.choice(neighbors)
+        if next_node in visited_nodes:
+            failures += 1
+            continue
+        path.append((int(next_edge_dict['label']), int(next_node)))
+    path = tuple(flatten(path))[1:]
+    assert path_length <= len(path) <= path_length + 1, breakpoint()
+    return path
+
+
+def _sample_triples(conf, graph):
+    yielded = 0
+    graph_nodes = np.array(list(graph.nodes))
+    yielded_paths = defaultdict(set)
+    if conf.unique_targets:
+        failures = 0
+        while True:
+            start_node_idxs = np.random.randint(
+                0, len(graph.nodes), conf.max_paths - yielded)
+            start_nodes = graph_nodes[start_node_idxs]
+            for start_node in start_nodes:
+                neighbors = list(graph.adj[start_node].items())
+                if not neighbors:
+                    continue
+                end_node, edge_dict = random.choice(neighbors)
+                label = edge_dict['label']
+                if label not in yielded_paths[start_node]:
+                    yield list(map(
+                        int, (start_node, label, end_node)))
+                    yielded_paths[start_node].add(label)
+                    yielded += 1
+                    failures = 0
+                else:
+                    failures += 1
+                    if failures > 100000:
+                        raise ValueError(
+                            f'Cannot sample {conf.max_paths} paths. '
+                            f'Yielded {yielded} unique paths.')
+            if yielded >= conf.max_paths:
+                break
+    else:
+        while True:
+            start_node_idxs = np.random.randint(
+                0, len(graph.nodes), conf.max_paths - yielded)
+            start_nodes = graph_nodes[start_node_idxs]
+            for start_node in start_nodes:
+                neighbors = list(graph.adj[start_node].items())
+                if not neighbors:
+                    continue
+                end_node, edge_dict = random.choice(neighbors)
+                yield list(map(
+                    int, (start_node, edge_dict['label'], end_node)))
+                yielded += 1
+            if yielded >= conf.max_paths:
+                break
 
 
 def graph_conf_str(conf):

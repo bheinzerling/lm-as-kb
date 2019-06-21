@@ -34,10 +34,16 @@ def make_evaluator(model, metrics):
         with torch.no_grad():
             fw_path, fw_target = batch[:, :-1], batch[:, -1]
             fw_pred = model(fw_path)
-            fw_pred_prob = torch.exp(fw_pred.take(fw_target))
+            fw_pred_prob = torch.exp(fw_pred)
+            fw_correct_prob = fw_pred_prob.gather(
+                1, fw_target.unsqueeze(1))
+            fw_max_prob = fw_pred_prob.max(dim=1)[0]
+            fw_prob_ratio = fw_correct_prob.squeeze(1) / fw_max_prob
+            fw_rank = (fw_pred_prob >= fw_correct_prob).sum(dim=1)
             io['fw_path'].append(fw_path.cpu())
             io['fw_target'].append(fw_target.cpu())
-            io['fw_pred'].append(fw_pred_prob.cpu())
+            io['fw_prob_ratio'].append(fw_prob_ratio.cpu())
+            io['fw_rank'].append(fw_rank.cpu())
             return fw_pred, fw_target
 
     engine = Engine(_inference)
