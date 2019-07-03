@@ -28,6 +28,10 @@ def add_generate_graph_args(a):
     a.add_argument(
         '--edge-label-distribution-args', type=json.loads, default='{}',
         help='Arguments to be passed to the random distribution generator')
+    a.add_argument(
+        '--degree-seq-distribution-args', type=json.loads, default='{}',
+        help='Arguments to be passed to the random distribution generator')
+    a.add_argument('--max-degree', type=int)
     a.add_argument('--random-seed', type=int, default=2)
     a.add_argument('--n-paths', type=int, default=100)
     a.add_argument('--n-path-samples', type=int, default=1)
@@ -36,6 +40,7 @@ def add_generate_graph_args(a):
     a.add_argument('--min-path-len', type=int, default=3)
     a.add_argument('--max-path-len', type=int, default=3)
     a.add_argument('--path-len-poisson-lambda', type=int, default=3)
+    a.add_argument('--add-path-end-marker', action='store_true')
 
 
 def add_model_args(a):
@@ -47,12 +52,14 @@ def add_model_args(a):
     a.add_argument('--dropout', type=float, default=0.0)
     a.add_argument('--n-directions', type=int, choices=[1, 2], default=2)
     a.add_argument('--tie-weights', action='store_true')
+    a.add_argument('--bptt', type=int, default=2)
 
 
 def add_training_args(a):
     a.add_argument('--batch-size', type=int, default=128)
     a.add_argument('--optim', type=str, default='adam')
     a.add_argument('--learning-rate', type=float, default=0.001)
+    a.add_argument("--learning-rate-scheduler", type=str)
     a.add_argument('--momentum', type=float, default=0.0)
     a.add_argument('--weight-decay', type=float, default=0.0)
     a.add_argument('--early-stopping', type=int, default=-1)
@@ -61,6 +68,8 @@ def add_training_args(a):
     a.add_argument('--first-eval-epoch', type=int, default=10)
     a.add_argument('--max-epochs', type=int, default=100)
     a.add_argument('--max-eval-n-inst', type=int, default=1000)
+    a.add_argument('--write-predictions', action='store_true')
+    a.add_argument('--n-neg-examples', type=int, default=20)
 
 
 def add_job_args(a):
@@ -70,7 +79,7 @@ def add_job_args(a):
     a.add_argument("--collect-jobs", action="store_true")
     a.add_argument("--print-configs", action="store_true")
     a.add_argument("--job-name", type=str)
-    a.add_argument('--jc', type=str, default='gpu-container_g1_dev.default')
+    a.add_argument('--jc', type=str, default='gpu-container_g1.default')
     a.add_argument('--ac', type=str, default='d=nvcr-cuda-9.0-cudnn7.2')
     a.add_argument("--results-store", type=str, default="out/results.h5")
     a.add_argument("--inspect-results", action="store_true")
@@ -106,6 +115,7 @@ def add_plot_args(a):
     a.add_argument(
         '--format', type=str, nargs='+', default=['html', 'png', 'svg'])
     a.add_argument('--plot-threads', type=int, default=1)
+    a.add_argument('--plot-no-markers', action='store_true')
 
 
 def get_argparser():
@@ -113,7 +123,9 @@ def get_argparser():
     a = argparse.ArgumentParser(description=desc)
     a.add_argument('command', type=str)
     a.add_argument('--no-commit', action='store_true')
+    a.add_argument('--no-cache', action='store_true')
     a.add_argument('--outdir', type=Path, default='out')
+    a.add_argument('--datadir', type=Path, default='data')
     a.add_argument('--exp-name', required=True)
     a.add_argument('--path-sample-id', type=int, default=0)
     a.add_argument('--max-paths', type=int, default=100000)
@@ -148,4 +160,6 @@ def get_args():
         args.exp_dir = args.outdir / args.exp_name
         args.results_dir = mkdir(args.exp_dir / 'results.new')
         args.results_store = args.exp_dir / 'results.h5'
+    if args.dataset != 'syntheticpaths':
+        args.graph_type = args.dataset
     return args

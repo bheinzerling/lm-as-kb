@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import networkx as nx
+import igraph
 
 from bokeh.io import save, output_file
 from bokeh.models import (
@@ -14,9 +15,10 @@ import bokeh.palettes
 from joblib import Parallel, delayed
 import joblib
 
-from dougu import Results, to_from_idx
+from dougu import Results, to_from_idx, mkdir
 from dougu.plot import (
     plt, simple_imshow, colors, linestyles, markers, Figure)
+from matplotlib import ticker
 from ballpark import ballpark
 
 from argparser import get_args
@@ -29,22 +31,40 @@ def get_graph_data(conf):
     graphdir = get_graphdir(conf)
     conf_str = graphdir.name
     if conf.graph_sweep:
-        graphfile = conf.outdir / 'graph_sweep' / (conf_str + '.edgelist')
+        graphfile = conf.outdir / 'graph_sweep' / (conf_str + '.graphml')
     else:
         graphfile = get_graphfile(graphdir)
-    if graphfile.exists():
-        graph = nx.read_edgelist(graphfile)
-    else:
+    if not graphfile.exists() or conf.no_cache:
         graph = generate_graph(conf)
-        nx.write_edgelist(graph, graphfile)
+        graph.write_graphml(str(graphfile))
+    graph = nx.read_graphml(graphfile)
     pagerank = nx.pagerank(graph)
 
     cachefile = conf.outdir / f'{conf_str}.pkl'
     if cachefile.exists():
         layout = joblib.load(cachefile)
+        print(cachefile)
+        assert set(layout.keys()) == set(graph.node()), breakpoint()
     else:
-        graph_renderer = from_networkx(
-            graph, nx.spring_layout, k=0.1, scale=1, center=(0, 0))
+        # graph_renderer = from_networkx(
+        #     graph, nx.spring_layout, k=0.1, scale=1, center=(0, 0))
+        # layout = graph_renderer.layout_provider.to_json(False)['graph_layout']
+        import igraph
+        ig = igraph.Graph()
+        ig.add_vertices(list(graph.nodes))
+        # ig.add_edges(list(graph.edges))
+        # coords = ig.layout_drl().coords
+        print('finding layout')
+        coords = ig.layout_fruchterman_reingold().coords
+        # coords = ig.layout_kamada_kawai().coords
+        node_names = [vertex['name'] for vertex in ig.vs]
+        assert len(coords) == len(node_names)
+        c = np.array(coords)
+        c[:, 0] /= np.abs(c[:, 0]).max()
+        c[:, 1] /= np.abs(c[:, 1]).max()
+        coords = c.tolist()
+        layout = dict(zip(node_names, coords))
+        graph_renderer = from_networkx(graph, layout, scale=1, center=(0, 0))
         layout = graph_renderer.layout_provider.to_json(False)['graph_layout']
         joblib.dump(layout, cachefile)
     return {
@@ -89,7 +109,7 @@ def plot_graph(conf):
         # print(len(set(pred['fw_path'][:, 0].tolist())), 'head entities')
         # print(len(set(pred['fw_target'].tolist())), 'tail entities')
     conf.animate = False
-    outdir = graphfile.parent / 'fig'
+    outdir = mkdir(graphfile.parent / 'fig')
     outfile = (outdir / conf_str).with_suffix('.graph_bokeh.html')
     _plt_graph(conf, conf_str, graph, layout, pagerank, outfile)
 
@@ -99,7 +119,8 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
         plot_width=1000,
         plot_height=1000,
         x_range=Range1d(-1.1, 1.1),
-        y_range=Range1d(-1.1, 1.1))
+        y_range=Range1d(-1.1, 1.1),
+        )
     plot.title.text = conf_str
     tooltips = [("index", "@index")]
     if pred is not None:
@@ -139,6 +160,8 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
         0.2), .2, 1)
     max_node_size = 10
     pr_sizes = s / s.max() * max_node_size
+    if len(graph) > 5000:
+        pr_sizes /= 2
     graph_renderer.node_renderer.data_source.data['pr'] = pr_sizes
 
     if conf.cmap.endswith('_r'):
@@ -152,7 +175,15 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
     if reverse:
         palette = list(reversed(palette))
 
-    node_color = linear_cmap(conf.color_by, palette, 0, 1, nan_color='gray')
+    if conf.animate:
+        node_color = linear_cmap(
+            conf.color_by, palette, 0, 1, nan_color='gray')
+        line_color = linear_cmap(
+            'edge_color', palette, 0, 1, nan_color='gray'),
+    else:
+        node_color = 'blue'
+        line_color = 'blue'
+
     graph_renderer.node_renderer.glyph = Circle(
         line_color=node_color,
         line_alpha=0.6,
@@ -162,8 +193,7 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
         size='pr')
     graph_renderer.edge_renderer.glyph = MultiLine(
         # line_color="edge_color",
-        line_color=linear_cmap(
-            'edge_color', palette, 0, 1, nan_color='gray'),
+        line_color=line_color,
         line_alpha=0.8, line_width=.2)
     plot.renderers = [graph_renderer]
     # if not conf.graph_sweep and not conf.animate:
@@ -185,13 +215,25 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
 
 def plot_results(conf):
     figdir = conf.outdir / 'fig'
-    with Results(conf.results_store, columns, index) as results:
+    results_store = conf.outdir / conf.exp_name / 'results.h5'
+
+    with Results(results_store, columns, index) as results:
         df = results.df
+        if conf.inspect_results:
+            breakpoint()
+            return
         if conf.emb_dim:
             df = df[df.emb_dim == conf.emb_dim]
+        df = df[df.n_layers == conf.n_layers]
+        df = df[df.model == conf.model]
+        df = df[df.graph_type == conf.graph_type]
+        print(len(df), 'data points')
         for val_col in 'epoch', 'acc':
+            conf_str = (
+                f'{conf.exp_name}.{conf.graph_type}.{conf.model}.'
+                f'{val_col}.n_layers_{conf.n_layers}')
             val_df = df[['n_hidden', 'n_paths', val_col]]
-            outfile = figdir / f'{conf.exp_name}.{val_col}.matrix.png'
+            outfile = figdir / f'{conf_str}.matrix.png'
             row_label2idx, row_loc_labels = to_from_idx(
                 sorted(df.n_hidden.unique()))
             n_paths = conf.sweep_n_paths or sorted(df.n_paths.unique())
@@ -213,14 +255,16 @@ def plot_results(conf):
                 bad_color='white',
                 cbar_title=val_col,
                 outfile=outfile)
-            print(outfile)
-
+            fig_title = f'{conf_str}.lines'
             with Figure(
-                    f'{conf.exp_name}.{val_col}.lines',
+                    fig_title,
                     xlabel='Number of relation triples',
                     ylabel={'acc': 'Accuracy', 'epoch': 'Epochs'}[val_col],
+                    xlim=(0, df.n_paths.max()),
+                    ylim=(0, 1.01),
                     figwidth=10,
                     figheight=6):
+                print(fig_title)
                 for n_hidden, color, linestyle, marker in zip(
                         sorted(df.n_hidden.unique()),
                         colors,
@@ -228,12 +272,23 @@ def plot_results(conf):
                         markers):
                     _df = df[df.n_hidden == n_hidden].sort_values('n_paths')
                     x, y = _df[['n_paths', val_col]].values.T
-                    n_params = (n_hidden + 1) * conf.n_nodes
+                    n_params = (
+                        (n_hidden + 1) * conf.n_nodes +
+                        conf.n_layers * n_hidden)
+                    if conf.plot_no_markers:
+                        marker = None
                     plt.plot(
                         x, y,
                         color=color, linestyle=linestyle, marker=marker,
                         label=ballpark(n_params))
                 ax = plt.gca()
+                ax.grid(
+                    which='major',
+                    linestyle='--',
+                    color='gray',
+                    alpha=0.3,
+                    linewidth=0.8)
+                ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
                 # box = ax.get_position()
                 # Shrink current axis by 20%
                 # ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])

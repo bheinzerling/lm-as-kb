@@ -20,6 +20,8 @@ def get_task_configs(_conf):
                 "'" + json.dumps(conf.graph_generator_args) + "'")
             conf.edge_label_distribution_args = (
                 "'" + json.dumps(conf.edge_label_distribution_args) + "'")
+            conf.degree_seq_distribution_args = (
+                "'" + json.dumps(conf.degree_seq_distribution_args) + "'")
             conf.n_paths = n_paths
             conf.n_hidden = n_hidden
             __conf = {}
@@ -36,15 +38,15 @@ def get_task_configs(_conf):
 
 def append_finished_results(conf, results):
     mkdir(conf.results_dir)
-    print('results dir:', conf.results_dir)
     added_dir = mkdir(conf.results_dir.with_suffix(".added"))
-    print('added dir:', added_dir)
     for file in conf.results_dir.iterdir():
         res_lines = list(lines(file))
         if len(res_lines) != 1:
             print("Ignoring malformed file:", file)
             continue
         result = json.loads(res_lines[0])
+        if 'model' not in result:
+            result['model'] = 'rnnpathmemory'
         results.append(result)
         shutil.move(str(file), str(added_dir))
         print("added:", result)
@@ -53,15 +55,16 @@ def append_finished_results(conf, results):
 index = [
     'graph_type',
     'unique_targets',
-    'n_nodes',
-    'n_edge_labels',
     'n_paths',
+    'model',
     'model_variant',
     'n_hidden',
     'n_layers',
     'emb_dim',
     ]
 values = [
+    'n_nodes',
+    'n_edge_labels',
     'runid',
     'epoch',
     'acc',
@@ -70,6 +73,8 @@ columns = index + values
 
 
 def main(conf):
+    print('results dir:', conf.results_dir)
+    print('results store:', conf.results_store)
     task_configs = list(get_task_configs(conf))
     submit_and_collect(
         conf, task_configs, index, columns, append_finished_results)
