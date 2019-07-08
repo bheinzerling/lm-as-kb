@@ -3,7 +3,8 @@ from collections import defaultdict
 import torch
 
 from dougu.ignite import Engine, Events
-from dougu.ignite.metrics import Loss, Accuracy
+from dougu.ignite.metrics import (
+    Loss, Accuracy, MeanReciprocalRank, TopKCategoricalAccuracy)
 from dougu.ignite.handlers import EarlyStopping, ModelCheckpoint
 from dougu import json_dump, dump_args, autocommit
 from dougu.torchutil import get_optim, set_random_seed
@@ -18,6 +19,8 @@ def make_trainer(model, optimizer):
         model.train()
         optimizer.zero_grad()
         fw_path, fw_target = batch[:, :-1], batch[:, -1]
+        # if hasattr(model, 'to_entity_emb_ids'):
+        #     fw_target = model.to_entity_emb_ids(fw_target).view(-1)
         fw_pred, fw_loss = model(fw_path, fw_target)
         fw_loss.backward()
         optimizer.step()
@@ -35,6 +38,8 @@ def make_evaluator(model, metrics):
             fw_path, fw_target = batch[:, :-1], batch[:, -1]
             fw_pred = model(fw_path)
             fw_pred_prob = torch.exp(fw_pred)
+            # if hasattr(model, 'to_entity_emb_ids'):
+            #     fw_target = model.to_entity_emb_ids(fw_target).view(-1)
             fw_correct_prob = fw_pred_prob.gather(
                 1, fw_target.unsqueeze(1))
             fw_max_prob = fw_pred_prob.max(dim=1)[0]
@@ -75,7 +80,11 @@ def memorize_paths(conf):
 
     trainer = make_trainer(model, optim)
     trainer.log('rundir ' + str(conf.rundir))
-    metrics = {'nll': Loss(model.crit), 'acc': Accuracy()}
+    metrics = {
+        'nll': Loss(model.crit),
+        'acc': Accuracy(),
+        'p@10': TopKCategoricalAccuracy(k=10),
+        'mrr': MeanReciprocalRank()}
     # TODO: add MRR metric, run on YAGO3_10
     evaluator = make_evaluator(model, metrics)
     checkpointer = ModelCheckpoint(
@@ -101,12 +110,15 @@ def memorize_paths(conf):
     def log_training_results(trainer):
         evaluator.run(data.loader_trainval)
         metrics = evaluator.state.metrics
-        trainer.log("epoch {:04d} {} | loss {:.4f} | acc {:.4f}".format(
-            trainer.state.epoch,
-            trainer.state.last_epoch_duration,
-            metrics['nll'],
-            metrics['acc']))
+        metrics_str = ' | '.join(
+            f'{metric} {val:.4f}' for metric, val in metrics.items())
+        trainer.log("epoch {:04d} {} | {}".format(
+                trainer.state.epoch,
+                trainer.state.last_epoch_duration,
+                metrics_str))
         trainer.state.last_acc = metrics['acc']
+        trainer.state.last_p10 = metrics['p@10']
+        trainer.state.last_mrr = metrics['mrr']
 
     if lr_scheduler is not None:
         @evaluator.on(Events.COMPLETED)
@@ -149,6 +161,8 @@ def memorize_paths(conf):
             for k in result_keys}
         results['epoch'] = epoch
         results['acc'] = trainer.state.last_acc
+        results['p@10'] = trainer.state.last_p10
+        results['mrr'] = trainer.state.last_mrr
         fname = conf.runid + '.json' if conf.runid else 'results.json'
         results_file = conf.results_dir / fname
         json_dump(results, results_file)

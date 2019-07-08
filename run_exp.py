@@ -8,6 +8,9 @@ from dougu.gpunode import submit_and_collect
 
 from argparser import get_args
 
+import warnings
+import tables
+
 
 def get_task_configs(_conf):
     conf_idx = 0
@@ -45,8 +48,10 @@ def append_finished_results(conf, results):
             print("Ignoring malformed file:", file)
             continue
         result = json.loads(res_lines[0])
-        if 'model' not in result:
-            result['model'] = 'rnnpathmemory'
+        if 'p@10' not in result:
+            import numpy as np
+            result['p@10'] = np.nan
+            result['mrr'] = np.nan
         results.append(result)
         shutil.move(str(file), str(added_dir))
         print("added:", result)
@@ -68,11 +73,14 @@ values = [
     'runid',
     'epoch',
     'acc',
+    'p@10',
+    'mrr',
     ]
 columns = index + values
 
 
 def main(conf):
+    warnings.simplefilter('ignore', tables.NaturalNameWarning)
     print('results dir:', conf.results_dir)
     print('results store:', conf.results_store)
     task_configs = list(get_task_configs(conf))

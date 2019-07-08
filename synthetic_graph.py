@@ -60,8 +60,9 @@ def generate_graph(conf):
                 degree_seq, degree_seq, method='no_multiple')
         graph.to_directed()
     elif conf.graph_type == 'watts_strogatz':
-        graph = igraph.Graph.Watts_Strogatz
-        breakpoint()
+        del conf.graph_generator_args['n']
+        conf.graph_generator_args['size'] = conf.n_nodes
+        graph = igraph.Graph.Watts_Strogatz(**conf.graph_generator_args)
     elif conf.graph_type == 'erdos_renyi':
         graph = igraph.Graph.Erdos_Renyi(
             directed=True, **conf.graph_generator_args)
@@ -135,6 +136,7 @@ def sample_paths(conf, graph=None):
         paths = tqdm(
             islice(sample_fn(conf, graph), conf.max_paths),
             total=conf.max_paths)
+        assert len(paths) == conf.max_paths, breakpoint()
         outfile = get_path_sample_file(conf, sample_id)
         print(outfile)
         with outfile.open('w') as out:

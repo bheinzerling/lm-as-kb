@@ -17,7 +17,7 @@ import joblib
 
 from dougu import Results, to_from_idx, mkdir
 from dougu.plot import (
-    plt, simple_imshow, colors, linestyles, markers, Figure)
+    plt, simple_imshow, colors, linestyles, markers, Figure, histogram)
 from matplotlib import ticker
 from ballpark import ballpark
 
@@ -82,6 +82,8 @@ def plot_graph(conf):
     conf_str = gd['conf_str']
     graphfile = gd['graphfile']
     layout = gd['layout']
+    nodes, degrees = zip(*graph.degree)
+    histogram(degrees, name='histogram.' + conf_str)
     if conf.animate:
         pred_files = sorted(conf.rundir.glob('predictions.e*.pt'))
         n_pred_files = len(pred_files)
@@ -214,11 +216,11 @@ def _plt_graph(conf, conf_str, graph, layout, pagerank, outfile, pred=None):
 
 
 def plot_results(conf):
-    figdir = conf.outdir / 'fig'
     results_store = conf.outdir / conf.exp_name / 'results.h5'
 
     with Results(results_store, columns, index) as results:
         df = results.df
+        orig_df = df
         if conf.inspect_results:
             breakpoint()
             return
@@ -228,78 +230,232 @@ def plot_results(conf):
         df = df[df.model == conf.model]
         df = df[df.graph_type == conf.graph_type]
         print(len(df), 'data points')
-        for val_col in 'epoch', 'acc':
-            conf_str = (
-                f'{conf.exp_name}.{conf.graph_type}.{conf.model}.'
-                f'{val_col}.n_layers_{conf.n_layers}')
-            val_df = df[['n_hidden', 'n_paths', val_col]]
-            outfile = figdir / f'{conf_str}.matrix.png'
-            row_label2idx, row_loc_labels = to_from_idx(
-                sorted(df.n_hidden.unique()))
-            n_paths = conf.sweep_n_paths or sorted(df.n_paths.unique())
-            col_label2idx, col_loc_labels = to_from_idx(n_paths)
-            results = np.empty((len(row_loc_labels), len(col_loc_labels)))
-            results.fill(np.nan)
-            for n_hidden, n_paths, val in val_df.values:
-                results[row_label2idx[n_hidden], col_label2idx[n_paths]] = val
-            simple_imshow(
-                results,
-                origin='lower',
-                xtick_locs_labels=zip(*col_loc_labels.items()),
-                ytick_locs_labels=zip(*row_loc_labels.items()),
-                xgrid=np.arange(len(col_loc_labels) - 1) + 0.5,
-                ygrid=np.arange(len(row_loc_labels) - 1) + 0.5,
-                xlabel='number of relation triples',
-                ylabel='model size (hidden units)',
-                cmap='cool',
-                bad_color='white',
-                cbar_title=val_col,
-                outfile=outfile)
-            fig_title = f'{conf_str}.lines'
-            with Figure(
-                    fig_title,
-                    xlabel='Number of relation triples',
-                    ylabel={'acc': 'Accuracy', 'epoch': 'Epochs'}[val_col],
-                    xlim=(0, df.n_paths.max()),
-                    ylim=(0, 1.01),
-                    figwidth=10,
-                    figheight=6):
-                print(fig_title)
-                for n_hidden, color, linestyle, marker in zip(
-                        sorted(df.n_hidden.unique()),
-                        colors,
-                        linestyles,
-                        markers):
-                    _df = df[df.n_hidden == n_hidden].sort_values('n_paths')
-                    x, y = _df[['n_paths', val_col]].values.T
-                    n_params = (
-                        (n_hidden + 1) * conf.n_nodes +
-                        conf.n_layers * n_hidden)
-                    if conf.plot_no_markers:
-                        marker = None
-                    plt.plot(
-                        x, y,
-                        color=color, linestyle=linestyle, marker=marker,
-                        label=ballpark(n_params))
-                ax = plt.gca()
-                ax.grid(
-                    which='major',
-                    linestyle='--',
-                    color='gray',
-                    alpha=0.3,
-                    linewidth=0.8)
-                ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
-                # box = ax.get_position()
-                # Shrink current axis by 20%
-                # ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-                # Put a legend to the right of the current axis
-                ax.legend(
-                    # loc='lower left',
-                    bbox_to_anchor=(1.01, 1.0),
-                    # ncol=2,
-                    borderaxespad=1,
-                    # frameon=False,
-                    title='Model parameters')
+        for val_col in 'epoch', 'acc', 'p@10', 'mrr':
+            _plot_results(conf, df, val_col, orig_df=orig_df)
+
+
+def get_n_params(conf, n_hidden):
+    # assumes weight tieing
+    emb_params = (conf.n_nodes * n_hidden + conf.n_edge_labels * n_hidden)
+    if conf.model == 'rnnpathmemory':
+        model_params = conf.n_layers * n_hidden
+    else:
+        model_params = 0
+    return emb_params + model_params
+
+
+def _plot_results(conf, df, val_col, orig_df=None):
+    figdir = conf.outdir / 'fig'
+    conf_str = (
+        f'{conf.exp_name}.{conf.graph_type}.{conf.model}.'
+        f'{val_col}.n_layers_{conf.n_layers}')
+    val_df = df[['n_hidden', 'n_paths', val_col]]
+    outfile = figdir / f'{conf_str}.matrix.png'
+    row_label2idx, row_loc_labels = to_from_idx(
+        sorted(df.n_hidden.unique()))
+    n_paths = conf.sweep_n_paths or sorted(df.n_paths.unique())
+    col_label2idx, col_loc_labels = to_from_idx(n_paths)
+    results = np.empty((len(row_loc_labels), len(col_loc_labels)))
+    results.fill(np.nan)
+    for n_hidden, n_paths, val in val_df.values:
+        results[row_label2idx[n_hidden], col_label2idx[n_paths]] = val
+
+    simple_imshow(
+        results,
+        origin='lower',
+        xtick_locs_labels=zip(*col_loc_labels.items()),
+        ytick_locs_labels=zip(*row_loc_labels.items()),
+        xgrid=np.arange(len(col_loc_labels) - 1) + 0.5,
+        ygrid=np.arange(len(row_loc_labels) - 1) + 0.5,
+        xlabel='number of relation triples',
+        ylabel='model size (hidden units)',
+        cmap='cool',
+        bad_color='white',
+        cbar_title=val_col,
+        outfile=outfile)
+
+    fig_title = f'{conf_str}.lines'
+    ylim = (0, 1.01) if val_col != 'epoch' else (0, conf.max_epochs)
+    with Figure(
+            fig_title,
+            xlabel='Number of relation triples',
+            ylabel={
+                'acc': 'Accuracy',
+                'epoch': 'Epochs',
+                'p@10': 'Precision@10',
+                'mrr': 'Mean Reciprocal Rank'}[val_col],
+            xlim=(0, df.n_paths.max()),
+            ylim=ylim,
+            figwidth=10,
+            figheight=6):
+        print(fig_title)
+        for n_hidden, color, linestyle, marker in zip(
+                sorted(df.n_hidden.unique()),
+                colors,
+                linestyles,
+                markers):
+            _df = df[df.n_hidden == n_hidden].sort_values('n_paths')
+            x, y = _df[['n_paths', val_col]].values.T
+            n_params = get_n_params(conf, n_hidden)
+            if conf.plot_no_markers:
+                marker = None
+            plt.plot(
+                x, y,
+                color=color, linestyle=linestyle, marker=marker,
+                label=ballpark(n_params))
+        ax = plt.gca()
+        ax.grid(
+            which='major',
+            linestyle='--',
+            color='gray',
+            alpha=0.3,
+            linewidth=0.8)
+        if val_col != 'epoch':
+            ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
+        # Put a legend to the right of the current axis
+        ax.legend(
+            bbox_to_anchor=(1.01, 1.0),
+            borderaxespad=1,
+            title='Model parameters')
+
+    if val_col == 'epoch':
+        return
+    # if val_col != 'acc':
+    #     return
+    # max_n_params = get_n_params(conf, df.n_hidden.max())
+    thresholds = .8, .9, .95, .99
+    metric = {
+        'acc': 'Accuracy',
+        'p@10': 'Precision@10',
+        'mrr': 'Mean Reciprocal Rank'}[val_col]
+    if orig_df is not None:
+        _df = orig_df
+    else:
+        _df = df
+    max_min_n_hidden = max(
+        _df[(_df[val_col] > threshold)].groupby(
+            ['n_paths', 'graph_type'])['n_hidden'].min(
+                ).groupby('graph_type').max().max()
+        for threshold in thresholds)
+    max_n_params = get_n_params(conf, max_min_n_hidden)
+    fig_title = f'{conf_str}.required_n_params'
+    print(fig_title)
+    with Figure(
+            fig_title,
+            xlabel='Number of relation triples',
+            ylabel='Required number of parameters',
+            xlim=(0, df.n_paths.max()),
+            ylim=(0, max_n_params + 0.01 * max_n_params),
+            figwidth=10,
+            figheight=6):
+        for threshold, color, linestyle, marker in zip(
+                thresholds, colors, linestyles, markers):
+            memorized = df[df[val_col] > threshold]
+            min_n_hidden = memorized.groupby('n_paths')['n_hidden'].min()
+            x, y = min_n_hidden.reset_index().values.T
+            y = [get_n_params(conf, n_hidden) for n_hidden in y]
+            plt.plot(
+                x, y,
+                color=color, linestyle=linestyle, marker=marker,
+                label=threshold)
+        ax = plt.gca()
+        ax.grid(
+            which='major',
+            linestyle='--',
+            color='gray',
+            alpha=0.3,
+            linewidth=0.8)
+        ax.legend(
+            bbox_to_anchor=(1.01, 1.0),
+            borderaxespad=1,
+            title='Min. ' + metric)
+    for threshold in thresholds:
+        fig_title = (
+            f'{conf.exp_name}.graph_type_model_comparison.'
+            f'min_{threshold}_{val_col}')
+        print(fig_title)
+        with Figure(
+                fig_title,
+                xlabel='Number of relation triples',
+                ylabel='Required number of parameters',
+                xlim=(0, df.n_paths.max()),
+                ylim=(0, max_n_params + 0.01 * max_n_params),
+                figwidth=10,
+                figheight=6):
+            graph_types = 'erdos_renyi', 'watts_strogatz', 'barabasi'
+            models = 'rnnpathmemory', 'distmult'
+            from itertools import product
+            for (graph_type, model), color, linestyle, marker in zip(
+                    product(graph_types, models),
+                    colors, linestyles, markers):
+                _df = orig_df
+                _df = _df[(_df.graph_type == graph_type) & (_df.model == model)]
+                print(graph_type, model, len(_df))
+                memorized = _df[_df[val_col] > threshold]
+                min_n_hidden = memorized.groupby('n_paths')['n_hidden'].min()
+                x, y = min_n_hidden.reset_index().values.T
+                y = [get_n_params(conf, n_hidden) for n_hidden in y]
+                model_name = {
+                    'rnnpathmemory': 'LSTM', 'distmult': 'DistMult'}[model]
+                plt.plot(
+                    x, y,
+                    color=color, linestyle=linestyle, marker=marker,
+                    label=f'{graph_type}, {model_name}')
+            ax = plt.gca()
+            ax.grid(
+                which='major',
+                linestyle='--',
+                color='gray',
+                alpha=0.3,
+                linewidth=0.8)
+            ax.legend(
+                bbox_to_anchor=(1.01, 1.0),
+                borderaxespad=1,
+                title='Graph type, model ')
+    for threshold in thresholds:
+        fig_title = (
+            f'{conf.exp_name}.n_triples_vs_n_params.'
+            f'min_{threshold}_{val_col}')
+        print(fig_title)
+        with Figure(
+                fig_title,
+                xlabel='Required number of parameters',
+                ylabel='Number of relation triples',
+                xlim=(0, max_n_params + 0.01 * max_n_params),
+                ylim=(0, df.n_paths.max()),
+                figwidth=10,
+                figheight=6):
+            graph_types = 'erdos_renyi', 'watts_strogatz', 'barabasi'
+            # graph_types = 'erdos_renyi', 'barabasi'
+            models = 'rnnpathmemory', 'distmult'
+            from itertools import product
+            for (graph_type, model), color, linestyle, marker in zip(
+                    product(graph_types, models),
+                    colors, linestyles, markers):
+                _df = orig_df
+                _df = _df[(_df.graph_type == graph_type) & (_df.model == model)]
+                print(graph_type, model, len(_df))
+                memorized = _df[_df[val_col] > threshold]
+                min_n_hidden = memorized.groupby('n_paths')['n_hidden'].min()
+                x, y = min_n_hidden.reset_index().values.T
+                y = [get_n_params(conf, n_hidden) for n_hidden in y]
+                model_name = {
+                    'rnnpathmemory': 'LSTM', 'distmult': 'DistMult'}[model]
+                plt.plot(
+                    y, x,
+                    color=color, linestyle=linestyle, marker=marker,
+                    label=f'{graph_type}, {model_name}')
+            ax = plt.gca()
+            ax.grid(
+                which='major',
+                linestyle='--',
+                color='gray',
+                alpha=0.3,
+                linewidth=0.8)
+            ax.legend(
+                bbox_to_anchor=(1.01, 1.0),
+                borderaxespad=1,
+                title='Graph type, model ')
 
 
 if __name__ == '__main__':

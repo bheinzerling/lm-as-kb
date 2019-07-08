@@ -36,6 +36,7 @@ class SyntheticPaths(KnowledgeGraphPaths):
             triple_conf.min_path_len = 3
             triple_conf.max_path_len = 3
             sample_paths(triple_conf)
+        print(paths_file)
         self.paths_raw = list(
             jsonlines_load(paths_file, max=conf.n_paths))
         self.triples_raw = list(
@@ -44,7 +45,7 @@ class SyntheticPaths(KnowledgeGraphPaths):
             self.paths = torch.tensor(self.paths_raw)
             if not conf.data_on_cpu:
                 self.paths = self.paths.to(device=conf.device)
-            assert len(self.paths) == conf.n_paths
+            assert len(self.paths) == conf.n_paths, len(self.paths)
             self.triples = self.paths
         else:
             if not conf.data_on_cpu:

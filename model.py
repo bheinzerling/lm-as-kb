@@ -121,26 +121,24 @@ class TransE(KnowledgeBaseEmbedding):
         return pred
 
 
+def _make_rnn(conf, bidirectional=False):
+    return getattr(nn, conf.model_variant)(
+        input_size=conf.emb_dim,
+        hidden_size=conf.n_hidden,
+        num_layers=conf.n_layers,
+        dropout=conf.dropout if conf.n_layers > 1 else 0.0,
+        bidirectional=bidirectional,
+        batch_first=True)
+
+
 class RnnPathMemory(PathMemory):
 
     def __init__(self, conf, data):
         super().__init__()
         n_emb = data.paths.max().item() + 1
         self.emb = nn.Embedding(n_emb, conf.emb_dim)
-
-        def _make_rnn():
-            return getattr(nn, conf.model_variant)(
-                input_size=conf.emb_dim,
-                hidden_size=conf.n_hidden,
-                num_layers=conf.n_layers,
-                dropout=conf.dropout if conf.n_layers > 1 else 0.0,
-                bidirectional=False,
-                batch_first=True)
-
-        self.forward_enc = _make_rnn()
-        # self.backward_enc = _make_rnn()
+        self.forward_enc = _make_rnn(conf)
         repr_dim = conf.n_hidden
-
         self.out = nn.Linear(repr_dim, n_emb)
         if conf.tie_weights:
             self.out.weight = nn.Parameter(self.emb.weight)
@@ -164,6 +162,62 @@ class RnnPathMemory(PathMemory):
             loss = self.crit(pred, target)
             return pred, loss
         return pred
+
+
+class RnnPathMemory_IdDigits(PathMemory):
+    def __init__(self, conf, data):
+        super().__init__()
+        self.n_entities = conf.n_nodes
+        n_predicates = conf.n_edge_labels
+        import numpy as np
+        self.base = 10
+        assert self.base == 10, 'change np.log10'
+        self.n_digits = int(np.ceil(np.log10(self.n_entities)))
+        exponents_np = np.arange(self.n_digits - 1, -1, -1)
+        self.exponents = torch.tensor(exponents_np).unsqueeze(0).cuda()
+        self.quots = 10 ** self.exponents
+        self.to_emb_id_offsets = 10 * self.exponents
+        n_elements = self.n_digits * self.base
+        self.entity_emb = nn.Embedding(n_elements, conf.emb_dim)
+        self.p_emb = nn.Embedding(n_predicates, conf.emb_dim)
+        self.forward_enc = _make_rnn(conf, bidirectional=True)
+        path_repr_dim = 2 * conf.n_hidden * (self.n_digits + 1)
+        out_repr_dim = conf.n_hidden * self.n_digits
+        self.to_out_proj = nn.Linear(path_repr_dim, out_repr_dim)
+        self.out = nn.Linear(conf.n_hidden, n_elements)
+        if conf.tie_weights:
+            self.out.weight = nn.Parameter(self.entity_emb.weight)
+        self.log_softmax = nn.LogSoftmax(dim=-1)
+        self.crit = nn.NLLLoss()
+
+    def forward(self, path, target=None):
+        bs = path.size(0)
+        s, p = path.t()
+        p_emb = self.p_emb(p - self.n_entities)
+        s_ids = self.to_entity_emb_ids(s)
+        s_id_emb = self.entity_emb(s_ids)
+        path_emb = torch.cat([s_id_emb, p_emb.unsqueeze(1)], dim=1)
+        rnn_out, rnn_hid = self.forward_enc(path_emb)
+        path_repr = rnn_out.contiguous().view(bs, -1)
+        o_digits_repr = self.to_out_proj(path_repr).view(bs, self.n_digits, -1)
+        o_digits_logits = self.out(o_digits_repr)
+        o_pred = self.log_softmax(o_digits_logits).view(bs * self.n_digits, -1)
+        # o_digits_pred = (
+        #     o_digits_ids_logits.max(dim=-1)[1] - self.to_emb_id_offsets)
+        # o_pred = (o_digits_pred * self.quots).sum(dim=-1)
+        if target is not None:
+            # logits = o_digits_ids_logits.view(bs * self.n_digits, -1)
+            # target_ids = self.to_entity_emb_ids(target).view(-1)
+            loss = self.crit(o_pred, target)
+            return o_pred, loss
+        return o_pred
+
+    def to_entity_emb_ids(self, entity_ids):
+        entity_ids_repeated = entity_ids.unsqueeze(1).repeat(1, self.n_digits)
+        remainders = entity_ids_repeated % (self.quots * 10)
+        s_digits = remainders / self.quots
+        entity_emb_ids = s_digits + self.to_emb_id_offsets
+        return entity_emb_ids
 
 
 class TransformerPathMemory(PathMemory):
