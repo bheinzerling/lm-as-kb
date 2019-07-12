@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 
-from dougu import SubclassRegistry, flatten
+from dougu import SubclassRegistry
 
 
 def maybe_cuda(fn):
@@ -12,7 +12,10 @@ def maybe_cuda(fn):
         model = fn(conf, data)
         if conf.device.startswith('cuda'):
             model = model.cuda(conf.device)
-        # TODO load model checkpoint
+        if conf.model_file:
+            print('loading', conf.model_file)
+            state_dict = torch.load(conf.model_file)
+            model.load_state_dict(state_dict)
         return model
     return wrapper
 

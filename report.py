@@ -382,7 +382,8 @@ def _plot_results(conf, df, val_col, orig_df=None):
                 ylim=(0, max_n_params + 0.01 * max_n_params),
                 figwidth=10,
                 figheight=6):
-            graph_types = 'erdos_renyi', 'watts_strogatz', 'barabasi'
+            graph_types = (
+                'erdos_renyi', 'watts_strogatz', 'barabasi', 'yago3_10')
             models = 'rnnpathmemory', 'distmult'
             from itertools import product
             for (graph_type, model), color, linestyle, marker in zip(
@@ -425,7 +426,8 @@ def _plot_results(conf, df, val_col, orig_df=None):
                 ylim=(0, df.n_paths.max()),
                 figwidth=10,
                 figheight=6):
-            graph_types = 'erdos_renyi', 'watts_strogatz', 'barabasi'
+            graph_types = (
+                'erdos_renyi', 'watts_strogatz', 'barabasi', 'yago3_10')
             # graph_types = 'erdos_renyi', 'barabasi'
             models = 'rnnpathmemory', 'distmult'
             from itertools import product

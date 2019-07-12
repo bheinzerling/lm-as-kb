@@ -289,6 +289,10 @@ def _graphfile(conf):
     return get_graphfile(outdir)
 
 
+def get_graph(conf):
+    return igraph.Graph.Read_GraphML(str(_graphfile(conf)))
+
+
 def path_sample_conf_str(conf, sample_id):
     return _path_sample_conf_str(
         conf, sample_id, conf.min_path_len, conf.max_path_len)

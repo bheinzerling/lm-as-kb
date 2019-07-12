@@ -53,6 +53,7 @@ def add_model_args(a):
     a.add_argument('--n-directions', type=int, choices=[1, 2], default=2)
     a.add_argument('--tie-weights', action='store_true')
     a.add_argument('--bptt', type=int, default=2)
+    a.add_argument('--model-file', type=Path)
 
 
 def add_training_args(a):
@@ -130,6 +131,8 @@ def get_argparser():
     a.add_argument('--path-sample-id', type=int, default=0)
     a.add_argument('--max-paths', type=int, default=100000)
     a.add_argument('--dataset', type=str)
+    a.add_argument('--samples-per-fuzz', type=int, default=1000)
+    a.add_argument('--inspect', action='store_true')
     add_model_args(a)
     add_generate_graph_args(a)
     add_training_args(a)
