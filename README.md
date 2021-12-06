@@ -5,8 +5,8 @@ https://www.aclweb.org/anthology/2021.eacl-main.153/
 
 To run memorization experiments, clone this repository, install the dependencies, then download and extract Wikidata statements and entity embeddings:
 
-- [Wikidata relation statements (1.3GB download)](https://drive.google.com/file/d/1j5Fln1jDzUWemUJD4hLBLJMN1AmnJm7S/view?usp=sharing)
-- [Wikidata entity embeddings (1.5GB download)](https://drive.google.com/file/d/1KlSCrtJD25VP_i4uoTYyUjh4qDxEKhrL/view?usp=sharing)
+- [Wikidata relation statements (1.3GB download)](https://drive.google.com/file/d/1Ga3dCuxUuRt3JEGNHUCeHwVVeC9YFOGU/view?usp=sharing)
+- [Wikidata entity embeddings (1.5GB download)](https://drive.google.com/file/d/1-BC9eoYxgyp2B1TqU_puscbXDVLNqoAc/view?usp=sharing)
 
 The basic command to run a memorization experiment is `python main.py train`.
 
